@@ -53,6 +53,7 @@ module.exports = async function handler(req, res) {
         ],
         max_tokens: 350,
         temperature: 0.75,
+        stream: true,
       }),
     });
 
@@ -62,11 +63,26 @@ module.exports = async function handler(req, res) {
       return res.status(502).json({ error: 'AI service unavailable' });
     }
 
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '';
-    res.json({ content });
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    const reader = response.body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(Buffer.from(value));
+      }
+    } finally {
+      res.end();
+    }
   } catch (err) {
     console.error('Handler error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error' });
+    } else {
+      res.end();
+    }
   }
 };

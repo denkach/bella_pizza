@@ -909,6 +909,15 @@
   .chat-mic:hover { opacity: 1; transform: scale(1.1); }
   .chat-mic.recording { opacity: 1; color: var(--tomato); animation: micPulse 0.9s ease-in-out infinite; }
   @keyframes micPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.22); } }
+  .msg-bot.streaming::after {
+    content: '▍';
+    display: inline-block;
+    animation: cursorBlink 0.65s steps(1) infinite;
+    color: var(--tomato);
+    font-size: 0.85em;
+    margin-left: 1px;
+  }
+  @keyframes cursorBlink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
 
   /* ============ REVEAL UTILITY ============ */
   .reveal { opacity: 0; transform: translateY(34px); transition: opacity 0.8s var(--ease), transform 0.8s var(--ease); }
@@ -1721,16 +1730,49 @@
         body: JSON.stringify({ messages: messages.slice(-20) }),
       });
       if (!res.ok) throw new Error('Network error');
-      const data = await res.json();
-      let content = data.content || 'Oops! 😅 Something went wrong. Try again!';
+
+      removeTyping();
+      const m = document.createElement('div');
+      m.className = 'msg msg-bot streaming';
+      chatBody.appendChild(m);
+      scrollDown();
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let fullContent = '';
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') continue;
+          try {
+            const delta = JSON.parse(data).choices?.[0]?.delta?.content || '';
+            if (delta) {
+              fullContent += delta;
+              m.innerHTML = renderBotText(fullContent.replace(/\[SHOW_MENU\]/g, '').trim());
+              scrollDown();
+            }
+          } catch (e) { /* skip malformed chunk */ }
+        }
+      }
+
+      m.classList.remove('streaming');
 
       let wantsMenu = false;
-      if (content.includes('[SHOW_MENU]')) {
-        content = content.replace('[SHOW_MENU]', '').trim();
+      if (fullContent.includes('[SHOW_MENU]')) {
+        fullContent = fullContent.replace(/\[SHOW_MENU\]/g, '').trim();
+        m.innerHTML = renderBotText(fullContent);
         wantsMenu = true;
       }
 
-      conversationHistory.push({ role: 'assistant', content });
+      conversationHistory.push({ role: 'assistant', content: fullContent });
 
       const nameM = userText.match(/(?:my name is|I(?:'m| am))\s+([A-Z][a-z]+)/i);
       if (nameM) {
@@ -1738,18 +1780,13 @@
         p.name = nameM[1]; localStorage.setItem('bellaPizzaPrefs', JSON.stringify(p));
       }
 
-      removeTyping();
-      const m = document.createElement('div');
-      m.className = 'msg msg-bot';
-      m.innerHTML = renderBotText(content);
-      chatBody.appendChild(m);
       const t = document.createElement('div');
       t.className = 'msg-time'; t.textContent = nowTime();
       chatBody.appendChild(t);
       scrollDown();
 
       if (wantsMenu) setTimeout(showMenu, 450);
-      else if (/order|menu|pizza/i.test(content)) setTimeout(addOrderChip, 1100);
+      else if (/order|menu|pizza/i.test(fullContent)) setTimeout(addOrderChip, 1100);
     } catch (err) {
       removeTyping();
       const m = document.createElement('div');
